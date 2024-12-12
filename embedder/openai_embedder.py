@@ -69,7 +69,6 @@ def batch_request(client, end_point, batch, custom_batch_id):
 
 
 async def wait_retrieve(client, batch_id: str, description: str='', delay=300, max_hr=24):
-    retry = max_hr * 60 * 60 * 1.5 // delay
     
     headers = {
         "Authorization": f"Bearer {client.api_key}"
@@ -77,13 +76,10 @@ async def wait_retrieve(client, batch_id: str, description: str='', delay=300, m
     
     timeout = aiohttp.ClientTimeout(total=600)
     async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-        # pbar = tqdm(range(retry), total=retry,)
-        # pbar.set_description(f"Waiting for batch api..." + (" ({description})" if description else ""))
-        # for _ in pbar:
         start_time = time.time()
         duration = max_hr * 60 * 60 * 1.5
         while True:
-            time_passed = time.time() - start_time
+            seconds_passed = time.time() - start_time
             try:
                 async with session.get(f"{client.base_url}/batches/{batch_id}") as resp:
                     request = await resp.json()
@@ -98,11 +94,11 @@ async def wait_retrieve(client, batch_id: str, description: str='', delay=300, m
                             return parse_output_file(output_file)
                     elif request['status'] not in ['in_progress', 'finalizing']:
                         pass
-                if time_passed > duration:
+                if seconds_passed > duration:
                     break
-                seconds_passed = time_passed // 60
+                minutes_passed = seconds_passed // 60
                 await asyncio.sleep(delay)
-                print(f"Waiting for batch api..." + (" ({description})" if description else "") + f"({seconds_passed} minutes passed)")
+                print(f"Waiting for batch api..." + (" ({description})" if description else "") + f"({minutes_passed} minutes passed)")
             except RetrieveException as e:
                 raise e
             except:
@@ -114,10 +110,9 @@ async def wait_retrieve(client, batch_id: str, description: str='', delay=300, m
 def list_requests(client: OpenAI):
     current_time = int(time.time())
     time_threshold = current_time - 24 * 60 * 60
-    print(time_threshold)
 
     for request in client.batches.list():
-        if request.status in ['in_progress', 'finalizing', 'finalizing', 'cancelling']:
+        if request.status in ['in_progress', 'finalizing', 'cancelling']:
             print(request.id, request.status, request.request_counts, (current_time - request.created_at) // 60)
             # print(request)
         # if request.created_at > time_threshold:
@@ -155,11 +150,11 @@ class OpenAIEmbedder(BaseEmbedder):
         # OpenAI max allowed batch size is 50_000
         if 'batch_size' not in processor_config:
             processor_config['batch_size'] = 50_000 
-            self.batch_size = 1_000
         else:
-            self.batch_size = processor_config['batch_size'] = min(processor_config['batch_size'], 50_000 if use_batch_api else 1_000)
+            self.batch_size = processor_config['batch_size'] = min(processor_config['batch_size'], 50_000)
             
         super().__init__(model_name, use_batch_api, processor_config)
+
 
 
     async def _batch_api(self, texts):
@@ -207,21 +202,19 @@ class OpenAIEmbedder(BaseEmbedder):
             results = await asyncio.gather(*tasks)
         else:
             results = []
-            batch_size = 1000
+            batch_size = 2000
             for i in range(0, len(texts), batch_size):
                 batch_texts = texts[i:i+batch_size]
                 for _ in range(25):
                     try:
-                        print(f"########################## Sending OpenAI API embedding request ({i+batch_size}/{len(texts)}) ##########################")
+                        print(f"########################## Sending OpenAI API embedding request ({i+len(batch_texts)}/{len(texts)}) ##########################")
                         response = self.client.embeddings.create(
                             input=batch_texts,
                             model=self.model_name
                         )
 
-                        batch_results = [None for _ in range(len(texts))]
                         for embedding in response.data:
-                            batch_results[embedding.index] = embedding.embedding
-                        results += batch_results
+                            results[i + embedding.index] = embedding.embedding
                         break
                     except Exception as e:
                         if any(isinstance(e, cls) for cls in (
